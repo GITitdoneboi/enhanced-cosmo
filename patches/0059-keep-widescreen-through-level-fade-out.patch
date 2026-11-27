@@ -1,0 +1,123 @@
+diff --git a/game1.c b/game1.c
+--- a/game1.c
++++ b/game1.c
+@@ -10319,7 +10319,7 @@
+ {
+     word x;
+ 
+-    FadeOut();
++    FadeOutLevel();
+     SelectDrawPage(0);
+     SelectActivePage(0);
+     ClearScreen();
+@@ -10580,9 +10580,6 @@
+         if (winLevel) {
+             winLevel = false;
+             PlatformSetMotionInterpolationPaused(1);
+-#ifdef COSMO_WIDESCREEN
+-            ClearWideTerrain();
+-#endif
+             StopMusic();
+             StartSound(SND_WIN_LEVEL);
+             NextLevel();
+@@ -10913,16 +10910,16 @@
+     static word mapVariables, musicNum;
+     FILE *fp;
+     word bdnum;
++
++    if (level_num == 0 && isNewGame) {
+ #ifdef COSMO_WIDESCREEN
+-    ClearWideTerrain();
++        ClearWideTerrain();
+ #endif
+-
+-    if (level_num == 0 && isNewGame) {
+         DrawFullscreenImage(IMAGE_ONE_MOMENT);
+         /* All my childhood, I wondered what it was doing here. It's bupkis. */
+         WaitSoft(300);
+     } else {
+-        FadeOut();
++        FadeOutLevel();
+     }
+ 
+     fp = GroupEntryFp(mapNames[level_num]);
+@@ -11053,9 +11050,6 @@
+ 
+         isInGame = true;
+         GameLoop(demoState);
+-#ifdef COSMO_WIDESCREEN
+-        ClearWideTerrain();
+-#endif
+         isInGame = false;
+ #ifdef COSMO_TOUCH_PREVIEW
+         PlatformSetTouchContext(TOUCH_MENU);
+diff --git a/game2.c b/game2.c
+--- a/game2.c
++++ b/game2.c
+@@ -723,6 +723,15 @@
+     FadeOutCustom(3);
+ }
+ 
++void FadeOutLevel(void)
++{
++    /* Keep the side terrain and wide HUD attached until the palette is black. */
++    FadeOut();
++#ifdef COSMO_WIDESCREEN
++    ClearWideTerrain();
++#endif
++}
++
+ /*
+ Draw one frame of the wait spinner on the screen at x,y and return the last
+ scancode read by the keyboard service. Does not wait.
+@@ -1433,7 +1442,7 @@
+ {
+     int i;
+ 
+-    FadeOut();
++    FadeOutLevel();
+     SelectDrawPage(0);
+     SelectActivePage(0);
+     ClearScreen();
+@@ -3177,10 +3186,10 @@
+     word x;
+ 
+ #if EPISODE == 1
++    WaitHard(5);
++    FadeOutLevel();
+     SelectDrawPage(0);
+     SelectActivePage(0);
+-    WaitHard(5);
+-    FadeOut();
+     DrawFullscreenImage(IMAGE_END);
+     WaitSpinner(39, 24);
+ 
+@@ -3214,7 +3223,7 @@
+     WaitHard(100);
+     WaitSpinner(x + 21, 8);
+ #elif EPISODE == 2
+-    FadeOut();
++    FadeOutLevel();
+     SelectDrawPage(0);
+     SelectActivePage(0);
+     ClearScreen();
+@@ -3253,7 +3262,7 @@
+     WaitSpinner(x + 21, 8);
+ #elif EPISODE == 3
+     StartMenuMusic(MUSIC_HAPPY);
+-    FadeOut();
++    FadeOutLevel();
+     SelectDrawPage(0);
+     SelectActivePage(0);
+     ClearScreen();
+diff --git a/glue.h b/glue.h
+--- a/glue.h
++++ b/glue.h
+@@ -191,6 +191,7 @@
+ void FadeOutCustom(word delay);
+ void FadeIn(void);
+ void FadeOut(void);
++void FadeOutLevel(void);
+ byte WaitSpinner(word x, word y);
+ void ClearScreen(void);
+ JoystickState ReadJoystickState(word stick_num);

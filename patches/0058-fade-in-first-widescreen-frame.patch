@@ -1,0 +1,74 @@
+diff --git a/game1.c b/game1.c
+--- a/game1.c
++++ b/game1.c
+@@ -10427,6 +10427,21 @@
+ static bbool exit_after_gameplay;
+ #endif
+ 
++static void FadeInLevel(void)
++{
++    FadeIn();
++
++#ifdef EXPLOSION_PALETTE
++    if (paletteAnimationNum == PAL_ANIM_EXPLOSIONS) {
++        SetPaletteRegister(PALETTE_KEY_INDEX, MODE1_BLACK);
++    }
++#endif  /* EXPLOSION_PALETTE */
++}
++
++#ifdef COSMO_WIDESCREEN
++static bbool fadeInWideLevel;
++#endif
++
+ static void GameLoop(byte demo_state)
+ {
+     const word frame_ticks = demo_state == DEMO_STATE_NONE && PlatformTurboMode() ? 10 : 13;
+@@ -10437,7 +10452,10 @@
+ 
+         gameTickCount = 0;
+ 
+-        AnimatePalette();
++#ifdef COSMO_WIDESCREEN
++        if (!fadeInWideLevel)
++#endif
++            AnimatePalette();
+ 
+         {  /* for scope */
+             word result = ProcessGameInputHelper(activePage, demo_state);
+@@ -10544,6 +10562,15 @@
+         activePage = !activePage;
+         PlatformSetCameraPosition(scrollX, scrollY, hasHScrollBackdrop, hasVScrollBackdrop, frame_ticks);
+         SelectActivePage(activePage);
++#ifdef COSMO_WIDESCREEN
++        if (fadeInWideLevel) {
++            /* The displayed page now contains the terrain extension and HUD. */
++            fadeInWideLevel = false;
++            PlatformSetMotionInterpolationPaused(1);
++            FadeInLevel();
++            PlatformSetMotionInterpolationPaused(0);
++        }
++#endif
+ 
+         if (pounceHintState == POUNCE_HINT_QUEUED) {
+             pounceHintState = POUNCE_HINT_SEEN;
+@@ -10967,13 +10994,13 @@
+         LoadTileAttributeData("TILEATTR.MNI");
+     }
+ 
+-    FadeIn();
+-
+-#ifdef EXPLOSION_PALETTE
+-    if (paletteAnimationNum == PAL_ANIM_EXPLOSIONS) {
+-        SetPaletteRegister(PALETTE_KEY_INDEX, MODE1_BLACK);
+-    }
+-#endif  /* EXPLOSION_PALETTE */
++#ifdef COSMO_WIDESCREEN
++    /* ClearGameScreen only draws the classic HUD. Keep the palette black until
++     * DrawMapRegion and the rest of the first widescreen frame are complete. */
++    fadeInWideLevel = demoState == DEMO_STATE_NONE && WideTerrainColumns() != 0;
++    if (!fadeInWideLevel)
++#endif
++        FadeInLevel();
+     PlatformSetMotionInterpolationPaused(0);
+ #ifdef COSMO_TOUCH_PREVIEW
+     PlatformSetTouchContext(demoState == DEMO_STATE_NONE ? TOUCH_PLAY : TOUCH_MENU);

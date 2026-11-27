@@ -14,7 +14,7 @@ android {
         applicationId = 'com.digows.cosmoenhanced'
         minSdk = 21
         targetSdk = 35
-        versionCode = 429
+        versionCode = 431
         versionName = '0.5.2'
         manifestPlaceholders = [cosmoScreenOrientation: 'sensorLandscape']
 
