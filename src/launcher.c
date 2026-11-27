@@ -408,7 +408,7 @@ static const struct mods_selector mods_selectors[] = {
     {"Filter", "Choose CRT blur, scanlines, both, or a clean image. "
                "Applies in standard and widescreen modes.",
      COSMO_CRT_MOD_ID, COSMO_SCANLINES_MOD_ID, {NULL, NULL}},
-    {"Soundtrack", "Choose the original music or the remixed soundtrack for Episode 1.",
+    {"Soundtrack", "Choose original music or MP3 remixes for tracks with replacements.",
      "mp3-music", NULL, {"Original", "New Remixed"}},
     {"SFX", "Choose the original sound effects or a softened mix.",
      "soft-sound-effects", NULL, {"Original", "Softened"}},

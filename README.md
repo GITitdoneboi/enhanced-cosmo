@@ -31,7 +31,7 @@ Open **Customise** in the episode launcher to choose how the game looks and soun
 
 - New installs use **Widescreen** for a wider playfield. On Windows and macOS, turn it off to use the original view.
 - **Smooth Gameplay** smooths scrolling, character movement, and animations. It starts enabled on new installs.
-- Switch between the original and remixed Episode 1 soundtrack, or between original and softened sound effects.
+- Switch between the original and remixed soundtracks across all three episodes, or between original and softened sound effects.
 - Choose CRT effects, scanlines, both, or neither. Both effects start disabled.
 - Preview and change Cosmo's body and accent colours under **Character Colour**.
 

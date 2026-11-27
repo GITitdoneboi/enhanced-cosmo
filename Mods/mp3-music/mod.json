@@ -3,6 +3,6 @@
   "name": "MP3 Audio Replacements",
   "version": "1.0.0",
   "author": "Cosmo mod example",
-  "description": "Plays alternate Episode 1 music from MP3 files.",
+  "description": "Plays MP3 remixes across all three episodes where a replacement is available.",
   "enabled": true
 }
