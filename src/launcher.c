@@ -1450,6 +1450,9 @@ static bool play_android_episode(int episode)
             }
             SDL_Delay(16);
         }
+        /* The episode process may have changed shared settings while we waited. */
+        if (!mods_init(paths_install_dir(), paths_write_dir()))
+            SDL_Log("Cosmo mods: could not reload episode settings");
         launcher_audio_ready = audio_init();
         launcher_sync_music();
     }

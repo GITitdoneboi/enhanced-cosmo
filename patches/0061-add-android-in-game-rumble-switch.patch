@@ -1,0 +1,73 @@
+diff --git a/game2.c b/game2.c
+--- a/game2.c
++++ b/game2.c
+@@ -2963,6 +2963,11 @@
+ int PlatformToggleTouchControls(void);
+ #endif
+ 
++#ifdef __ANDROID__
++int PlatformGamepadRumbleEnabled(void);
++int PlatformToggleGamepadRumble(void);
++#endif
++
+ enum game_setting {
+ #ifndef __ANDROID__
+     SETTING_KEYBOARD,
+@@ -2971,6 +2976,9 @@
+     SETTING_SOUND, SETTING_FILTER,
+ #ifdef COSMO_TOUCH_PREVIEW
+     SETTING_TOUCH,
++#endif
++#ifdef __ANDROID__
++    SETTING_RUMBLE,
+ #endif
+     SETTING_COUNT
+ };
+@@ -3001,6 +3009,13 @@
+     13,
+ #   endif
+ #endif
++#ifdef __ANDROID__
++#   ifdef COSMO_TOUCH_PREVIEW
++    13,
++#   else
++    12,
++#   endif
++#endif
+ };
+ 
+ static void ClearSettingsText(word x, word y, word tiles)
+@@ -3029,6 +3044,11 @@
+ #ifdef COSMO_TOUCH_PREVIEW
+     case SETTING_TOUCH:
+         snprintf(value, sizeof value, "< %s >", PlatformTouchControlsEnabled() ? "On" : "Off");
++        break;
++#endif
++#ifdef __ANDROID__
++    case SETTING_RUMBLE:
++        snprintf(value, sizeof value, "< %s >", PlatformGamepadRumbleEnabled() ? "On" : "Off");
+         break;
+ #endif
+     default:
+@@ -3061,6 +3081,9 @@
+     DrawTextLine(x + 2, settingsRows[SETTING_FILTER], "Filter");
+ #ifdef COSMO_TOUCH_PREVIEW
+     DrawTextLine(x + 2, settingsRows[SETTING_TOUCH], "Touch Controls");
++#endif
++#ifdef __ANDROID__
++    DrawTextLine(x + 2, settingsRows[SETTING_RUMBLE], "Gamepad Rumble");
+ #endif
+     for (byte setting = SETTING_MUSIC; setting < SETTING_COUNT; setting++)
+         DrawGameSettingsValue(x, setting);
+@@ -3120,6 +3143,11 @@
+             save_failed = !PlatformToggleTouchControls();
+         }
+ #endif
++#ifdef __ANDROID__
++        if (step && selection == SETTING_RUMBLE) {
++            save_failed = !PlatformToggleGamepadRumble();
++        }
++#endif
+         if (step && selection == SETTING_FILTER) {
+             save_failed = !PlatformStepDisplayFilter(step);
+         } else if (step && (selection == SETTING_MUSIC || selection == SETTING_SOUND)) {

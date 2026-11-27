@@ -742,6 +742,29 @@ void PlatformSetGameSettingsOpen(int open)
     SDL_SetAtomicInt(&game_settings_open, open);
 }
 
+#ifdef __ANDROID__
+int PlatformGamepadRumbleEnabled(void)
+{
+    return mods_gamepad_rumble_enabled();
+}
+
+static void SDLCALL toggle_gamepad_rumble(void *userdata)
+{
+    bool *saved = userdata;
+    bool enabled = !mods_gamepad_rumble_enabled();
+    *saved = mods_set_gamepad_rumble(enabled);
+    if (*saved && !enabled && gamepad)
+        SDL_RumbleGamepad(gamepad, 0, 0, 0);
+}
+
+int PlatformToggleGamepadRumble(void)
+{
+    bool saved = false;
+    /* Save and stop controller vibration on the thread that handles haptics. */
+    return SDL_RunOnMainThread(toggle_gamepad_rumble, &saved, true) && saved;
+}
+#endif
+
 static void update_gamepad(bool focused)
 {
     bool west = false, east = false, north = false, south = false;
