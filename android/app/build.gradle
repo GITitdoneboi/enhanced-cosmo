@@ -14,8 +14,8 @@ android {
         applicationId = 'com.digows.cosmoenhanced'
         minSdk = 21
         targetSdk = 35
-        versionCode = 424
-        versionName = '0.5.0'
+        versionCode = 429
+        versionName = '0.5.2'
         manifestPlaceholders = [cosmoScreenOrientation: 'sensorLandscape']
 
         externalNativeBuild {
@@ -68,6 +68,9 @@ android {
 
 tasks.register('syncCosmoAndroidAssets', Sync) {
     from(rootProject.file('touch-preview/launcher-touch-panel.png'))
+    from("${cosmoRoot}/assets") {
+        include 'cosmo1_000.png', 'cosmo2_000.png', 'cosmo3_000.png'
+    }
     from(file("${cosmoRoot}/gamedata/COSMO1.STN"))
     from(file("${cosmoRoot}/gamedata/COSMO1.VOL"))
     from("${cosmoRoot}/Mods") {

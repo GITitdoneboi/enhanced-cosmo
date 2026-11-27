@@ -18,6 +18,10 @@
 #include <string.h>
 
 #include <SDL3/SDL.h>
+#ifdef __ANDROID__
+#include <jni.h>
+#include "cosmo/font.h"
+#endif
 
 /*
  * glue.h is deliberately not included here. It defines `bool`, `true` and
@@ -25,6 +29,23 @@
  * SDL's headers rely on. Only one symbol is needed from the game anyway.
  */
 void InnerMain(int argc, char *argv[]);
+
+#ifdef __ANDROID__
+void PlatformFinishEpisode(void)
+{
+    /* Remove the episode activity before DOS exit ends its private process. */
+    JNIEnv *env = SDL_GetAndroidJNIEnv();
+    if (!env) return;
+    jobject activity = SDL_GetAndroidActivity();
+    if (!activity) return;
+    jclass type = (*env)->GetObjectClass(env, activity);
+    jmethodID finish = type ? (*env)->GetMethodID(env, type, "finish", "()V") : NULL;
+    if (finish) (*env)->CallVoidMethod(env, activity, finish);
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    if (type) (*env)->DeleteLocalRef(env, type);
+    (*env)->DeleteLocalRef(env, activity);
+}
+#endif
 
 /*
  * The game's own key and command state, for COSMO_DEBUG reporting. `bbool` is
@@ -1085,6 +1106,10 @@ int main(int argc, char *argv[])
     SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight");
     SDL_SetHint(SDL_HINT_TOUCH_MOUSE_EVENTS, "0");
     PlatformLoadTouchControls();
+#ifdef __ANDROID__
+    /* Each episode module owns its font state. Use the bundled touch-label font. */
+    (void)font_load(paths_data_dir(), 1);
+#endif
 #endif
     if (!video_init("Cosmo's Cosmic Adventure", 3, widescreen)) return 1;
 #ifdef COSMO_TOUCH_PREVIEW

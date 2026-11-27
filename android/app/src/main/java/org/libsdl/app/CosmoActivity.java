@@ -11,6 +11,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.provider.OpenableColumns;
 import android.view.KeyEvent;
+import android.widget.Toast;
 
 import java.io.File;
 import java.io.FileOutputStream;
@@ -19,10 +20,13 @@ import java.io.InputStream;
 import java.io.RandomAccessFile;
 
 /** Prepares bundled game data and mods before SDL starts the native entry point. */
-public final class CosmoActivity extends SDLActivity {
+public class CosmoActivity extends SDLActivity {
     private static final int EPISODE_PICKER_REQUEST = 132;
+    private static final int PLAY_EPISODE_REQUEST = 133;
+    private static final String EPISODE_NUMBER = "episode";
     private static final long ESCAPE_HOLD_MS = 120;
     private volatile int episodeImportResult;
+    private volatile boolean episodeRunning;
     private int importEpisode;
     private final Handler keyHandler = new Handler(Looper.getMainLooper());
     private final Runnable releaseEscape = () -> SDLActivity.onNativeKeyUp(KeyEvent.KEYCODE_ESCAPE);
@@ -64,6 +68,32 @@ public final class CosmoActivity extends SDLActivity {
         super.onCreate(savedInstanceState);
     }
 
+    public static final class EpisodeActivity extends CosmoActivity {
+        @Override
+        protected String[] getArguments() {
+            return new String[]{Integer.toString(getIntent().getIntExtra(EPISODE_NUMBER, 1))};
+        }
+    }
+
+    // The legacy game exits its process. Keep the launcher on the same task's back stack.
+    public void startEpisode(int episode) {
+        episodeRunning = true;
+        runOnUiThread(() -> {
+            Intent intent = new Intent(this, EpisodeActivity.class);
+            intent.putExtra(EPISODE_NUMBER, episode);
+            try {
+                startActivityForResult(intent, PLAY_EPISODE_REQUEST);
+            } catch (ActivityNotFoundException e) {
+                episodeRunning = false;
+                Toast.makeText(this, "Could not open the episode", Toast.LENGTH_SHORT).show();
+            }
+        });
+    }
+
+    public boolean isEpisodeRunning() {
+        return episodeRunning;
+    }
+
     // Called by the native launcher. The launcher polls until the import finishes.
     public void startEpisodeImport(int episode) {
         episodeImportResult = 0;
@@ -98,6 +128,10 @@ public final class CosmoActivity extends SDLActivity {
 
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        if (requestCode == PLAY_EPISODE_REQUEST) {
+            episodeRunning = false;
+            return;
+        }
         if (requestCode != EPISODE_PICKER_REQUEST) {
             super.onActivityResult(requestCode, resultCode, data);
             return;

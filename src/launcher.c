@@ -5,7 +5,7 @@
  * whole actor implementations. Windows loads the selected episode module into
  * this process and reuses this window.
  *
- * The menu is drawn with the game's own font on the game's own title art,
+ * The classic menu is drawn with the game's own font on its title art,
  * through the same emulated EGA the game uses, so it looks like part of the
  * game rather than part of the host.
  */
@@ -284,6 +284,256 @@ static struct episode episodes[EPISODE_COUNT] = {
 #endif
 };
 
+#ifdef __ANDROID__
+enum {
+    CARD_MENU_WIDTH = 480,
+    CARD_MENU_HEIGHT = 270,
+    STARFIELD_WIDTH = 320,
+    STARFIELD_HEIGHT = 144
+};
+
+enum { CARD_ART_GREYSCALE, CARD_ART_COLOUR, CARD_ART_COUNT };
+
+struct episode_cards {
+    SDL_Renderer *renderer;
+    SDL_Texture *starfield;
+    SDL_Texture *art[EPISODE_COUNT][CARD_ART_COUNT];
+    int previous_width, previous_height;
+    SDL_RendererLogicalPresentation previous_mode;
+};
+
+static const SDL_FRect customise_button = {176, 215, 128, 32};
+
+static SDL_FRect episode_card_rect(int index)
+{
+    return (SDL_FRect){16 + 152 * index, 64, 144, 132};
+}
+
+static bool set_card_presentation(const struct episode_cards *cards, bool active)
+{
+    return SDL_SetRenderLogicalPresentation(
+        cards->renderer,
+        active ? CARD_MENU_WIDTH : cards->previous_width,
+        active ? CARD_MENU_HEIGHT : cards->previous_height,
+        active ? SDL_LOGICAL_PRESENTATION_LETTERBOX : cards->previous_mode);
+}
+
+static void destroy_episode_cards(struct episode_cards *cards)
+{
+    SDL_DestroyTexture(cards->starfield);
+    for (int i = 0; i < EPISODE_COUNT; i++) {
+        for (int variant = 0; variant < CARD_ART_COUNT; variant++)
+            SDL_DestroyTexture(cards->art[i][variant]);
+    }
+    cards->renderer = NULL;
+}
+
+static SDL_Texture *load_card_starfield(SDL_Renderer *renderer)
+{
+    /* The opaque backdrop stores 8x8 tiles, with four EGA plane bytes per row. */
+    Uint8 tiles[STARFIELD_WIDTH * STARFIELD_HEIGHT / 2];
+    if (group_read(paths_data_dir(), 1, "BDSTAR2.MNI", tiles, sizeof tiles) != sizeof tiles)
+        return NULL;
+
+    SDL_Surface *surface = SDL_CreateSurface(STARFIELD_WIDTH, STARFIELD_HEIGHT,
+                                             SDL_PIXELFORMAT_RGB24);
+    if (!surface) return NULL;
+
+    Uint8 palette[16][3];
+    for (int i = 0; i < 16; i++)
+        ega_palette_rgb(i < 8 ? i : i + 8, palette[i]);
+
+    for (int y = 0; y < STARFIELD_HEIGHT; y++) {
+        Uint8 *row = (Uint8 *)surface->pixels + y * surface->pitch;
+        for (int x = 0; x < STARFIELD_WIDTH; x++) {
+            int tile = (y / 8) * (STARFIELD_WIDTH / 8) + x / 8;
+            const Uint8 *planes = tiles + tile * 32 + (y % 8) * 4;
+            unsigned bit = 0x80u >> (x % 8);
+            unsigned index = 0;
+            for (unsigned plane = 0; plane < 4; plane++)
+                if (planes[plane] & bit) index |= 1u << plane;
+            memcpy(row + x * 3, palette[index], 3);
+        }
+    }
+
+    SDL_Texture *texture = SDL_CreateTextureFromSurface(renderer, surface);
+    SDL_DestroySurface(surface);
+    if (texture && !SDL_SetTextureScaleMode(texture, SDL_SCALEMODE_NEAREST)) {
+        SDL_DestroyTexture(texture);
+        return NULL;
+    }
+    return texture;
+}
+
+static bool load_episode_art(struct episode_cards *cards, int index, const char *path)
+{
+    SDL_Surface *image = SDL_LoadPNG(path);
+    if (!image) return false;
+    SDL_Surface *grey = SDL_ConvertSurface(image, SDL_PIXELFORMAT_RGBA32);
+    SDL_Texture *colour_texture = SDL_CreateTextureFromSurface(cards->renderer, image);
+    cards->art[index][CARD_ART_COLOUR] = colour_texture;
+    SDL_DestroySurface(image);
+    if (!grey) return false;
+    if (!SDL_LockSurface(grey)) {
+        SDL_DestroySurface(grey);
+        return false;
+    }
+    for (int y = 0; y < grey->h; y++) {
+        Uint8 *pixel = (Uint8 *)grey->pixels + y * grey->pitch;
+        for (int x = 0; x < grey->w; x++, pixel += 4) {
+            Uint8 luma = (77 * pixel[0] + 150 * pixel[1] + 29 * pixel[2] + 128) >> 8;
+            pixel[0] = pixel[1] = pixel[2] = luma;
+        }
+    }
+    SDL_UnlockSurface(grey);
+    SDL_Texture *grey_texture = SDL_CreateTextureFromSurface(cards->renderer, grey);
+    cards->art[index][CARD_ART_GREYSCALE] = grey_texture;
+    SDL_DestroySurface(grey);
+    return grey_texture && colour_texture &&
+           SDL_SetTextureScaleMode(grey_texture, SDL_SCALEMODE_NEAREST) &&
+           SDL_SetTextureScaleMode(colour_texture, SDL_SCALEMODE_NEAREST);
+}
+
+static void init_episode_cards(struct episode_cards *cards)
+{
+    if (EPISODE_COUNT != 3) return;
+    cards->renderer = SDL_GetRenderer(video_get_window());
+    if (!cards->renderer ||
+        !SDL_GetRenderLogicalPresentation(cards->renderer, &cards->previous_width,
+                                         &cards->previous_height, &cards->previous_mode)) {
+        cards->renderer = NULL;
+        return;
+    }
+
+    for (int i = 0; i < EPISODE_COUNT; i++) {
+        char path[32];
+        snprintf(path, sizeof path, "cosmo%d_000.png", episodes[i].number);
+        if (!load_episode_art(cards, i, path)) {
+            SDL_Log("cosmo: could not load episode card %s: %s", path, SDL_GetError());
+            destroy_episode_cards(cards);
+            return;
+        }
+    }
+
+    cards->starfield = load_card_starfield(cards->renderer);
+    if (!cards->starfield) SDL_Log("cosmo: episode card backdrop is unavailable");
+    if (!set_card_presentation(cards, true)) destroy_episode_cards(cards);
+}
+
+static void launcher_rgb(SDL_Renderer *renderer, Uint32 rgb)
+{
+    SDL_SetRenderDrawColor(renderer, (Uint8)(rgb >> 16), (Uint8)(rgb >> 8), (Uint8)rgb, 255);
+}
+
+static void draw_launcher_bevel(SDL_Renderer *renderer, const SDL_FRect *rect,
+                                Uint32 face, Uint32 highlight, Uint32 shadow)
+{
+    float right = rect->x + rect->w - 1, bottom = rect->y + rect->h - 1;
+    launcher_rgb(renderer, face);
+    SDL_RenderFillRect(renderer, rect);
+    launcher_rgb(renderer, highlight);
+    SDL_RenderLine(renderer, rect->x, rect->y, right, rect->y);
+    SDL_RenderLine(renderer, rect->x, rect->y, rect->x, bottom);
+    launcher_rgb(renderer, shadow);
+    SDL_RenderLine(renderer, rect->x + 1, bottom, right, bottom);
+    SDL_RenderLine(renderer, right, rect->y + 1, right, bottom);
+}
+
+static void draw_card_panel(SDL_Renderer *renderer, const SDL_FRect *rect, bool focused)
+{
+    /* Keep the beveled panel readable on the starfield, with brighter rails on focus. */
+    if (focused)
+        draw_launcher_bevel(renderer, rect, 0x49cbe0, 0xbbffff, 0x238fbb);
+    else
+        draw_launcher_bevel(renderer, rect, 0x254759, 0x5e9dab, 0x193244);
+    SDL_FRect well = {rect->x + 2, rect->y + 2, rect->w - 4, rect->h - 4};
+    draw_launcher_bevel(renderer, &well, 0x1b2034, 0x101521, 0x344d61);
+}
+
+static void draw_card_label(SDL_Renderer *renderer, float center, float y, const char *label)
+{
+    SDL_RenderDebugText(renderer, center - SDL_DEBUG_TEXT_FONT_CHARACTER_SIZE *
+                        (float)strlen(label) / 2, y, label);
+}
+
+static void draw_launcher_title(SDL_Renderer *renderer, float y, const char *title)
+{
+    SDL_SetRenderScale(renderer, 2, 2);
+    launcher_rgb(renderer, 0x134c61);
+    draw_card_label(renderer, CARD_MENU_WIDTH / 4 + 1, y + 1, title);
+    launcher_rgb(renderer, 0xb5f8ee);
+    draw_card_label(renderer, CARD_MENU_WIDTH / 4, y, title);
+    SDL_SetRenderScale(renderer, 1, 1);
+}
+
+static void draw_card_background(const struct episode_cards *cards)
+{
+    SDL_Renderer *renderer = cards->renderer;
+    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
+    SDL_RenderClear(renderer);
+    if (cards->starfield) {
+        /* Fill the landscape canvas, cropping the sides to keep stars square. */
+        const float width = STARFIELD_WIDTH * (float)CARD_MENU_HEIGHT / STARFIELD_HEIGHT;
+        SDL_FRect backdrop = {(CARD_MENU_WIDTH - width) / 2, 0, width, CARD_MENU_HEIGHT};
+        SDL_RenderTexture(renderer, cards->starfield, NULL, &backdrop);
+    }
+}
+
+static void present_episode_cards(const struct episode_cards *cards, int selected, bool capture)
+{
+    SDL_Renderer *renderer = cards->renderer;
+    draw_card_background(cards);
+    draw_launcher_title(renderer, 13, "Pick an episode");
+
+    for (int i = 0; i < EPISODE_COUNT; i++) {
+        SDL_FRect rect = episode_card_rect(i);
+        SDL_FRect art = {rect.x + 4, rect.y + 4, 136, 85};
+        float center = rect.x + rect.w / 2;
+        bool present = episodes[i].present;
+        draw_card_panel(renderer, &rect, i == selected);
+        SDL_RenderTexture(renderer, cards->art[i][present ? CARD_ART_COLOUR : CARD_ART_GREYSCALE],
+                          NULL, &art);
+        launcher_rgb(renderer, 0xfff4df);
+        draw_card_label(renderer, center, rect.y + 97, episodes[i].title);
+        launcher_rgb(renderer, present ? 0xa2f088 : 0xffbe72);
+        draw_card_label(renderer, center, rect.y + 113, present ? "Play" : "Import");
+    }
+
+    draw_card_panel(renderer, &customise_button, selected == EPISODE_COUNT);
+    launcher_rgb(renderer, 0xfff4df);
+    draw_card_label(renderer, CARD_MENU_WIDTH / 2, customise_button.y + 12, "Customise");
+
+    const char *shot = capture ? SDL_getenv("COSMO_SHOT_PATH") : NULL;
+    if (shot) {
+        SDL_Surface *pixels = SDL_RenderReadPixels(renderer, NULL);
+        if (pixels) {
+            char path[512];
+            snprintf(path, sizeof path, "%s-menu.png", shot);
+            SDL_SavePNG(pixels, path);
+            SDL_DestroySurface(pixels);
+        }
+    }
+    SDL_RenderPresent(renderer);
+}
+
+static int episode_card_at_event(const struct episode_cards *cards, SDL_Event *event)
+{
+    bool finger = event->type == SDL_EVENT_FINGER_DOWN;
+    if (!finger && (event->type != SDL_EVENT_MOUSE_BUTTON_DOWN ||
+                    event->button.button != SDL_BUTTON_LEFT ||
+                    event->button.which == SDL_TOUCH_MOUSEID)) return -1;
+    if (!SDL_ConvertEventToRenderCoordinates(cards->renderer, event)) return -1;
+
+    SDL_FPoint point = finger ? (SDL_FPoint){event->tfinger.x, event->tfinger.y}
+                              : (SDL_FPoint){event->button.x, event->button.y};
+    for (int i = 0; i < EPISODE_COUNT; i++) {
+        SDL_FRect rect = episode_card_rect(i);
+        if (SDL_PointInRectFloat(&point, &rect)) return i;
+    }
+    return SDL_PointInRectFloat(&point, &customise_button) ? EPISODE_COUNT : -1;
+}
+#endif
+
 
 
 /* ------------------------------------------------------------------------ */
@@ -465,6 +715,26 @@ static bool step_mods_choice(const struct mods_row *row, int step)
     return mods_set_enabled(row->primary, !mods_get(row->primary)->enabled);
 }
 
+static bool apply_mods_row(const struct mods_row *row, int step)
+{
+    if (row->selector) {
+        bool saved = step_mods_choice(row, step);
+        if (saved) launcher_sync_music();
+        return saved;
+    }
+    if (row->rumble) {
+        bool enabled = !mods_gamepad_rumble_enabled();
+        bool saved = mods_set_gamepad_rumble(enabled);
+        if (saved && !enabled && launcher_gamepad)
+            SDL_RumbleGamepad(launcher_gamepad, 0, 0, 0);
+        return saved;
+    }
+#ifdef COSMO_TOUCH_PREVIEW
+    if (row->touch) return PlatformToggleTouchControls();
+#endif
+    return mods_set_enabled(row->primary, !mods_get(row->primary)->enabled);
+}
+
 static void draw_mod_description(const char *description)
 {
     char line[35];
@@ -571,8 +841,7 @@ static bool run_mods_menu(int episode)
                 launcher_menu_haptic(false);
             } else if (event.key.key == SDLK_LEFT || event.key.key == SDLK_RIGHT) {
                 if (!rows[selected].selector || event.key.repeat) continue;
-                save_failed = !step_mods_choice(&rows[selected], event.key.key == SDLK_LEFT ? -1 : 1);
-                if (!save_failed) launcher_sync_music();
+                save_failed = !apply_mods_row(&rows[selected], event.key.key == SDLK_LEFT ? -1 : 1);
                 launcher_menu_haptic(!save_failed);
             } else if (event.key.key == SDLK_RETURN || event.key.key == SDLK_KP_ENTER || event.key.key == SDLK_SPACE) {
                 if (event.key.repeat) continue;
@@ -580,24 +849,8 @@ static bool run_mods_menu(int episode)
                     launcher_menu_haptic(true);
                     if (run_colour_menu(episode)) return true;
                     (void)draw_background(episode);
-                } else if (rows[selected].selector) {
-                    save_failed = !step_mods_choice(&rows[selected], 1);
-                    if (!save_failed) launcher_sync_music();
-                    launcher_menu_haptic(!save_failed);
-                } else if (rows[selected].rumble) {
-                    bool enabled = !mods_gamepad_rumble_enabled();
-                    save_failed = !mods_set_gamepad_rumble(enabled);
-                    if (!save_failed && !enabled && launcher_gamepad)
-                        SDL_RumbleGamepad(launcher_gamepad, 0, 0, 0);
-                    launcher_menu_haptic(!save_failed);
-#ifdef COSMO_TOUCH_PREVIEW
-                } else if (rows[selected].touch) {
-                    save_failed = !PlatformToggleTouchControls();
-                    launcher_menu_haptic(!save_failed);
-#endif
                 } else {
-                    size_t index = rows[selected].primary;
-                    save_failed = !mods_set_enabled(index, !mods_get(index)->enabled);
+                    save_failed = !apply_mods_row(&rows[selected], 1);
                     launcher_menu_haptic(!save_failed);
                 }
             } else continue;
@@ -767,6 +1020,382 @@ static bool run_colour_menu(int episode)
     }
 }
 
+#ifdef __ANDROID__
+static const SDL_FRect touch_back_button = {16, 8, 68, 34};
+
+struct settings_press {
+    SDL_FPoint start;
+    SDL_FingerID finger;
+    bool active;
+    bool mouse;
+};
+
+static bool settings_tap(const struct episode_cards *cards, struct settings_press *press,
+                         SDL_Event *event, SDL_FPoint *point)
+{
+    bool mouse = event->type == SDL_EVENT_MOUSE_BUTTON_DOWN ||
+                 event->type == SDL_EVENT_MOUSE_BUTTON_UP;
+    if (event->type == SDL_EVENT_FINGER_CANCELED && !press->mouse &&
+        event->tfinger.fingerID == press->finger) {
+        press->active = false;
+    }
+    if (mouse) {
+        if (event->button.button != SDL_BUTTON_LEFT ||
+            event->button.which == SDL_TOUCH_MOUSEID) return false;
+    } else if (event->type != SDL_EVENT_FINGER_DOWN && event->type != SDL_EVENT_FINGER_UP) {
+        return false;
+    }
+
+    if (!SDL_ConvertEventToRenderCoordinates(cards->renderer, event)) return false;
+    *point = mouse ? (SDL_FPoint){event->button.x, event->button.y}
+                   : (SDL_FPoint){event->tfinger.x, event->tfinger.y};
+    SDL_FingerID finger = mouse ? 0 : event->tfinger.fingerID;
+    if (event->type == SDL_EVENT_MOUSE_BUTTON_DOWN || event->type == SDL_EVENT_FINGER_DOWN) {
+        if (!press->active) *press = (struct settings_press){*point, finger, true, mouse};
+        return false;
+    }
+    if (!press->active || press->mouse != mouse || press->finger != finger) return false;
+    press->active = false;
+    return SDL_fabsf(point->x - press->start.x) < 12 &&
+           SDL_fabsf(point->y - press->start.y) < 12;
+}
+
+static void settings_ink(SDL_Renderer *renderer)
+{
+    launcher_rgb(renderer, 0xfff4df);
+}
+
+static void settings_button(SDL_Renderer *renderer, const SDL_FRect *rect,
+                            const char *label, bool focused)
+{
+    draw_card_panel(renderer, rect, focused);
+    settings_ink(renderer);
+    draw_card_label(renderer, rect->x + rect->w / 2, rect->y + (rect->h - 8) / 2, label);
+}
+
+static void draw_settings_header(const struct episode_cards *cards, const char *title)
+{
+    SDL_Renderer *renderer = cards->renderer;
+    draw_card_background(cards);
+    settings_button(renderer, &touch_back_button, "< Back", false);
+    draw_launcher_title(renderer, 9, title);
+}
+
+static bool settings_confirm(SDL_Keycode key)
+{
+    return key == SDLK_RETURN || key == SDLK_KP_ENTER || key == SDLK_SPACE;
+}
+
+static void draw_settings_stepper(SDL_Renderer *renderer, const SDL_FRect *row,
+                                  const char *label, const char *value, bool focused)
+{
+    draw_card_panel(renderer, row, focused);
+    settings_ink(renderer);
+    SDL_RenderDebugText(renderer, row->x + 10, row->y + 7, label);
+    launcher_rgb(renderer, 0xa2f088);
+    SDL_RenderDebugText(renderer, row->x + 10, row->y + 23, value);
+
+    SDL_FRect minus = {row->x + row->w - 76, row->y + 3, 34, row->h - 6};
+    SDL_FRect plus = {minus.x + 38, minus.y, minus.w, minus.h};
+    settings_button(renderer, &minus, "-", false);
+    settings_button(renderer, &plus, "+", false);
+}
+
+static int settings_step(const SDL_FRect *row, float x)
+{
+    return x >= row->x + row->w - 76 && x < row->x + row->w - 38 ? -1 : 1;
+}
+
+static SDL_Texture *make_settings_preview(SDL_Renderer *renderer, struct player_preview frame,
+                                          const int colours[2])
+{
+    if (!frame.width) return NULL;
+    mods_preview_player_colours(frame.tiles, frame.width * frame.height * 40, colours);
+    SDL_Surface *surface = SDL_CreateSurface(frame.width * 8, frame.height * 8,
+                                             SDL_PIXELFORMAT_RGBA32);
+    if (!surface) return NULL;
+    for (unsigned y = 0; y < frame.height * 8; y++) {
+        Uint8 *pixel = (Uint8 *)surface->pixels + y * surface->pitch;
+        for (unsigned x = 0; x < frame.width * 8; x++, pixel += 4) {
+            const Uint8 *row = frame.tiles + ((y / 8) * frame.width + x / 8) * 40 + (y % 8) * 5;
+            unsigned bit = 0x80u >> (x % 8);
+            unsigned index = 0;
+            for (unsigned plane = 0; plane < 4; plane++)
+                if (row[1 + plane] & bit) index |= 1u << plane;
+            ega_palette_rgb(index < 8 ? index : index + 8, pixel);
+            pixel[3] = row[0] & bit ? 0 : 255;
+        }
+    }
+    SDL_Texture *texture = SDL_CreateTextureFromSurface(renderer, surface);
+    SDL_DestroySurface(surface);
+    if (texture) SDL_SetTextureScaleMode(texture, SDL_SCALEMODE_NEAREST);
+    return texture;
+}
+
+static bool run_touch_colour_menu(const struct episode_cards *cards, int episode)
+{
+    static const SDL_FRect controls[] = {
+        {16, 60, 246, 42}, {16, 111, 246, 42}, {16, 165, 118, 42}, {144, 165, 118, 42}
+    };
+    const SDL_FRect preview_panel = {280, 60, 184, 147};
+    struct player_preview frame = load_player_preview(episode);
+    SDL_Renderer *renderer = cards->renderer;
+    struct settings_press press = {0};
+    int colours[2], selected = 0;
+    bool reset = false, refresh = true, save_failed = false, quit = false;
+    SDL_Texture *preview = NULL;
+    mods_get_player_colours(colours);
+
+    for (;;) {
+        if (refresh) {
+            SDL_DestroyTexture(preview);
+            preview = make_settings_preview(renderer, frame, reset ? NULL : colours);
+            refresh = false;
+        }
+        draw_settings_header(cards, "Character Colour");
+        draw_settings_stepper(renderer, &controls[0], "Body",
+                              reset ? "Default" : mods_player_colour_name(colours[0]),
+                              selected == 0);
+        draw_settings_stepper(renderer, &controls[1], "Accents",
+                              reset ? "Default" : mods_player_colour_name(colours[1]),
+                              selected == 1);
+        settings_button(renderer, &controls[2], "Reset", selected == 2);
+        settings_button(renderer, &controls[3], "Save", selected == 3);
+        draw_card_panel(renderer, &preview_panel, false);
+        settings_ink(renderer);
+        draw_card_label(renderer, 372, 73, "Preview");
+        if (preview) {
+            float scale = SDL_min(3, SDL_min(164 / (int)(frame.width * 8),
+                                             105 / (int)(frame.height * 8)));
+            float w = frame.width * 8 * scale, h = frame.height * 8 * scale;
+            SDL_FRect dest = {372 - w / 2, 141 - h / 2, w, h};
+            SDL_RenderTexture(renderer, preview, NULL, &dest);
+        } else draw_card_label(renderer, 372, 137, "No preview");
+        if (reset || save_failed) {
+            draw_card_label(renderer, 240, 228, save_failed ? "Could not save colours"
+                                                          : "Default colours selected");
+        }
+        SDL_RenderPresent(renderer);
+
+        SDL_Event event;
+        launcher_poll_music_worker();
+        launcher_poll_gamepad();
+        while (video_poll_event(&event)) {
+            if (event.type == SDL_EVENT_QUIT) {
+                quit = true;
+                goto done;
+            }
+            int step = 0;
+            SDL_FPoint point;
+            if (settings_tap(cards, &press, &event, &point)) {
+                if (SDL_PointInRectFloat(&point, &touch_back_button)) goto done;
+                for (int i = 0; i < (int)SDL_arraysize(controls); i++) {
+                    if (!SDL_PointInRectFloat(&point, &controls[i])) continue;
+                    selected = i;
+                    step = settings_step(&controls[i], point.x);
+                    break;
+                }
+            } else if (event.type == SDL_EVENT_KEY_DOWN) {
+                SDL_Keycode key = event.key.key;
+                if (key == SDLK_ESCAPE || key == SDLK_AC_BACK) goto done;
+                if (key == SDLK_UP || key == SDLK_DOWN) {
+                    selected = (selected + (key == SDLK_UP ? 3 : 1)) % 4;
+                    launcher_menu_haptic(false);
+                } else if (!event.key.repeat) {
+                    if (selected < 2 && (key == SDLK_LEFT || key == SDLK_RIGHT))
+                        step = key == SDLK_LEFT ? -1 : 1;
+                    else if (settings_confirm(key)) step = 1;
+                }
+            }
+            if (!step) continue;
+            if (selected == 3) {
+                save_failed = !mods_save_player_colours(reset ? NULL : colours);
+                launcher_menu_haptic(!save_failed);
+                if (!save_failed) goto done;
+                continue;
+            }
+            reset = selected == 2;
+            if (!reset)
+                colours[selected] = (colours[selected] + step + COSMO_PLAYER_COLOUR_COUNT)
+                                    % COSMO_PLAYER_COLOUR_COUNT;
+            refresh = true;
+            save_failed = false;
+            launcher_menu_haptic(true);
+        }
+        video_delay(16);
+    }
+
+done:
+    SDL_DestroyTexture(preview);
+    return quit;
+}
+
+enum { TOUCH_SETTINGS_PAGE = 8 };
+static const SDL_FRect settings_previous = {330, 8, 36, 34};
+static const SDL_FRect settings_next = {428, 8, 36, 34};
+
+static SDL_FRect touch_setting_rect(size_t slot)
+{
+    return (SDL_FRect){16 + 228 * (slot % 2), 48 + 42 * (slot / 2), 220, 39};
+}
+
+static void draw_touch_setting(SDL_Renderer *renderer, const struct mods_row *row,
+                               SDL_FRect rect, size_t index, bool focused)
+{
+    if (row->selector) {
+        const char *value = row->selector->secondary_id ? mods_display_filter_name()
+            : row->selector->values[mods_get(row->primary)->enabled];
+        draw_settings_stepper(renderer, &rect, row->selector->label, value, focused);
+        return;
+    }
+
+    const cosmo_mod *mod = index && !row->touch && !row->rumble ? mods_get(row->primary) : NULL;
+    const char *label = mod ? mod->name : !index ? "Character Colour" :
+                        row->touch ? "Touch Controls" : "Gamepad Rumble";
+    char name[19];
+    snprintf(name, sizeof name, "%.18s", label);
+    draw_card_panel(renderer, &rect, focused);
+    settings_ink(renderer);
+    SDL_RenderDebugText(renderer, rect.x + 10, rect.y + 15, name);
+    if (!index) {
+        SDL_RenderDebugText(renderer, rect.x + rect.w - 24, rect.y + 15, ">");
+        return;
+    }
+
+    bool enabled = mod ? mod->enabled : mods_gamepad_rumble_enabled();
+#ifdef COSMO_TOUCH_PREVIEW
+    if (row->touch) enabled = PlatformTouchControlsEnabled();
+#endif
+    SDL_FRect toggle = {rect.x + rect.w - 59, rect.y + 9, 50, 21};
+    draw_launcher_bevel(renderer, &toggle, enabled ? 0x174b21 : 0x393339,
+                        0x101521, 0x416977);
+    SDL_FRect thumb = {toggle.x + (enabled ? 36 : 4), toggle.y + 4, 10, 13};
+    if (enabled)
+        draw_launcher_bevel(renderer, &thumb, 0x62cd39, 0xc7ff8b, 0x2c7328);
+    else
+        draw_launcher_bevel(renderer, &thumb, 0x9e9290, 0xe9dace, 0x54484a);
+    settings_ink(renderer);
+    SDL_RenderDebugText(renderer, toggle.x + (enabled ? 9 : 19), toggle.y + 7,
+                        enabled ? "On" : "Off");
+}
+
+static void draw_settings_description(SDL_Renderer *renderer, const struct mods_row *row,
+                                      size_t selected, bool save_failed)
+{
+    const char *info = save_failed ? "Could not save settings" :
+                       row->selector ? row->selector->description :
+                       !selected ? "Change Cosmo's body and accents" :
+                       row->touch ? "Show the on-screen buttons during gameplay" :
+                       row->rumble ? "Controller vibration in menus and gameplay" :
+                       mods_get(row->primary)->description;
+    const SDL_FRect panel = {16, 221, 448, 37};
+    draw_card_panel(renderer, &panel, false);
+    settings_ink(renderer);
+    for (int line = 0; line < 3 && *info; line++) {
+        size_t length = SDL_min(strcspn(info, "\r\n"), 54);
+        if (length == 54 && info[length] && info[length] != ' ') {
+            size_t end = length;
+            while (end && info[end] != ' ') end--;
+            if (end) length = end;
+        }
+        char summary[55];
+        snprintf(summary, sizeof summary, "%.*s", (int)length, info);
+        SDL_RenderDebugText(renderer, panel.x + 8, panel.y + 5 + line * 10, summary);
+        info += length;
+        info += strspn(info, " \t\r\n");
+    }
+}
+
+static void draw_settings_pagination(SDL_Renderer *renderer, size_t first, size_t count)
+{
+    if (count <= TOUCH_SETTINGS_PAGE) return;
+    if (first) settings_button(renderer, &settings_previous, "<", false);
+    if (first + TOUCH_SETTINGS_PAGE < count)
+        settings_button(renderer, &settings_next, ">", false);
+    char page[24];
+    snprintf(page, sizeof page, "%u/%u", (unsigned)(first / TOUCH_SETTINGS_PAGE + 1),
+             (unsigned)((count + TOUCH_SETTINGS_PAGE - 1) / TOUCH_SETTINGS_PAGE));
+    settings_ink(renderer);
+    draw_card_label(renderer, 397, 21, page);
+}
+
+static bool run_touch_mods_menu(const struct episode_cards *cards, int episode)
+{
+    struct mods_row rows[COSMO_MOD_LIMIT + 3];
+    size_t count = collect_mods_rows(rows);
+    size_t selected = 0;
+    bool save_failed = false;
+    struct settings_press press = {0};
+    SDL_Renderer *renderer = cards->renderer;
+
+    for (;;) {
+        size_t first = selected / TOUCH_SETTINGS_PAGE * TOUCH_SETTINGS_PAGE;
+        size_t end = SDL_min(first + TOUCH_SETTINGS_PAGE, count);
+        draw_settings_header(cards, "Customise");
+        draw_settings_pagination(renderer, first, count);
+        for (size_t i = first; i < end; i++)
+            draw_touch_setting(renderer, &rows[i], touch_setting_rect(i - first), i, i == selected);
+        draw_settings_description(renderer, &rows[selected], selected, save_failed);
+        SDL_RenderPresent(renderer);
+
+        SDL_Event event;
+        launcher_poll_music_worker();
+        launcher_poll_gamepad();
+        while (video_poll_event(&event)) {
+            if (event.type == SDL_EVENT_QUIT) return true;
+            int step = 0;
+            SDL_FPoint point;
+            if (settings_tap(cards, &press, &event, &point)) {
+                if (SDL_PointInRectFloat(&point, &touch_back_button)) return false;
+                if (first && SDL_PointInRectFloat(&point, &settings_previous)) {
+                    selected = first - TOUCH_SETTINGS_PAGE;
+                    save_failed = false;
+                    break;
+                }
+                if (end < count && SDL_PointInRectFloat(&point, &settings_next)) {
+                    selected = end;
+                    save_failed = false;
+                    break;
+                }
+                for (size_t i = first; i < end; i++) {
+                    SDL_FRect rect = touch_setting_rect(i - first);
+                    if (!SDL_PointInRectFloat(&point, &rect)) continue;
+                    selected = i;
+                    step = settings_step(&rect, point.x);
+                    break;
+                }
+            } else if (event.type == SDL_EVENT_KEY_DOWN) {
+                SDL_Keycode key = event.key.key;
+                if (key == SDLK_ESCAPE || key == SDLK_AC_BACK) return false;
+                if (key == SDLK_UP || key == SDLK_DOWN) {
+                    selected = key == SDLK_UP ? (selected + count - 2) % count
+                                             : (selected + 2) % count;
+                } else if (key == SDLK_LEFT || key == SDLK_RIGHT) {
+                    selected = key == SDLK_LEFT ? (selected + count - 1) % count
+                                               : (selected + 1) % count;
+                } else if (settings_confirm(key) && !event.key.repeat) {
+                    step = 1;
+                } else continue;
+                if (!step) {
+                    save_failed = false;
+                    launcher_menu_haptic(false);
+                    if (selected < first || selected >= end) break;
+                }
+            }
+            if (!step) continue;
+            if (selected == 0) {
+                launcher_menu_haptic(true);
+                if (run_touch_colour_menu(cards, episode)) return true;
+                break;
+            }
+            save_failed = !apply_mods_row(&rows[selected], step);
+            launcher_menu_haptic(!save_failed);
+        }
+        video_delay(16);
+    }
+}
+#endif
+
 /* ------------------------------------------------------------------------ */
 /* Selection                                                                */
 /* ------------------------------------------------------------------------ */
@@ -794,6 +1423,47 @@ static int step_selection(int selected, int direction)
 /* ------------------------------------------------------------------------ */
 
 #ifdef __ANDROID__
+static bool play_android_episode(int episode)
+{
+    JNIEnv *env = SDL_GetAndroidJNIEnv();
+    if (!env) return false;
+    jobject activity = SDL_GetAndroidActivity();
+    if (!activity) return false;
+
+    jclass type = (*env)->GetObjectClass(env, activity);
+    jmethodID start = type ? (*env)->GetMethodID(env, type, "startEpisode", "(I)V") : NULL;
+    jmethodID running = start ? (*env)->GetMethodID(env, type, "isEpisodeRunning", "()Z") : NULL;
+    bool quit = false;
+    if (running) {
+        launcher_audio_shutdown();
+        (*env)->CallVoidMethod(env, activity, start, (jint)episode);
+        while (!(*env)->ExceptionCheck(env)) {
+            jboolean active = (*env)->CallBooleanMethod(env, activity, running);
+            if ((*env)->ExceptionCheck(env) || !active) break;
+
+            SDL_Event event;
+            while (video_poll_event(&event)) {
+                if (event.type == SDL_EVENT_QUIT) {
+                    quit = true;
+                    goto done;
+                }
+            }
+            SDL_Delay(16);
+        }
+        launcher_audio_ready = audio_init();
+        launcher_sync_music();
+    }
+
+done:
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        SDL_Log("Cosmo: could not open episode %d", episode);
+    }
+    if (type) (*env)->DeleteLocalRef(env, type);
+    (*env)->DeleteLocalRef(env, activity);
+    return quit;
+}
+
 static bool offer_import(int episode)
 {
     JNIEnv *env = SDL_GetAndroidJNIEnv();
@@ -911,14 +1581,29 @@ static int choose_episode(int selected)
 }
 
 /* Returns the chosen episode number, or 0 if the user quit. */
-static int run_menu(void)
+static int run_menu(
+#ifdef __ANDROID__
+    struct episode_cards *cards
+#else
+    void
+#endif
+)
 {
     int selected = first_present();
     bool redraw = true;
+#ifdef __ANDROID__
+    int last_episode = selected;
+#endif
 
     for (;;) {
         SDL_Event event;
 
+#ifdef __ANDROID__
+        if (cards->renderer) {
+            present_episode_cards(cards, selected, redraw);
+            redraw = false;
+        } else
+#endif
         if (redraw) {
             draw_menu(selected);
             redraw = false;
@@ -937,9 +1622,25 @@ static int run_menu(void)
 
         launcher_poll_music_worker();
         launcher_poll_gamepad();
-        while (launcher_poll_event(&event)) {
+        while (
+#ifdef __ANDROID__
+            cards->renderer ? video_poll_event(&event) :
+#endif
+            launcher_poll_event(&event)) {
             if (event.type == SDL_EVENT_QUIT) return 0;
 
+#ifdef __ANDROID__
+            if (cards->renderer) {
+                if (selected < EPISODE_COUNT) last_episode = selected;
+                int hit = episode_card_at_event(cards, &event);
+                if (hit >= 0) {
+                    selected = hit;
+                    SDL_zero(event);
+                    event.type = SDL_EVENT_KEY_DOWN;
+                    event.key.key = SDLK_RETURN;
+                }
+            }
+#endif
             if (event.type != SDL_EVENT_KEY_DOWN) continue;
 
             SDL_Keycode key = event.key.key;
@@ -962,6 +1663,13 @@ static int run_menu(void)
 
             case SDLK_UP:
             case SDLK_LEFT:
+#ifdef __ANDROID__
+                if (cards->renderer) {
+                    if (selected == EPISODE_COUNT) selected = last_episode;
+                    else if (key == SDLK_LEFT)
+                        selected = (selected + EPISODE_COUNT - 1) % EPISODE_COUNT;
+                } else
+#endif
                 selected = step_selection(selected, -1);
                 launcher_menu_haptic(false);
                 redraw = true;
@@ -969,6 +1677,17 @@ static int run_menu(void)
 
             case SDLK_DOWN:
             case SDLK_RIGHT:
+#ifdef __ANDROID__
+                if (cards->renderer) {
+                    if (selected != EPISODE_COUNT) {
+                        if (key == SDLK_DOWN) {
+                            selected = EPISODE_COUNT;
+                        } else {
+                            selected = (selected + 1) % EPISODE_COUNT;
+                        }
+                    }
+                } else
+#endif
                 selected = step_selection(selected, 1);
                 launcher_menu_haptic(false);
                 redraw = true;
@@ -981,6 +1700,13 @@ static int run_menu(void)
                 launcher_menu_haptic(true);
                 if (selected == EPISODE_COUNT) {
                     int preview_episode = episodes[first_present()].number;
+#ifdef __ANDROID__
+                    if (cards->renderer) {
+                        if (run_touch_mods_menu(cards, preview_episode)) return 0;
+                        redraw = true;
+                        break;
+                    }
+#endif
                     if (run_mods_menu(preview_episode)) return 0;
                     (void)draw_background(preview_episode);
                     install_palette();
@@ -989,7 +1715,11 @@ static int run_menu(void)
                     break;
                 }
                 int chosen = choose_episode(selected);
+#ifdef __ANDROID__
+                if (chosen && play_android_episode(chosen)) return 0;
+#else
                 if (chosen) return chosen;
+#endif
                 redraw = true;
                 break;
             }
@@ -999,7 +1729,10 @@ static int run_menu(void)
             }
         }
 
-        video_present();
+#ifdef __ANDROID__
+        if (!cards->renderer)
+#endif
+            video_present();
         video_delay(16);
     }
 }
@@ -1242,14 +1975,27 @@ int main(int argc, char *argv[])
 
         install_palette();
         ega_select_active_page(0);
-        unfold_launch_frame();
+#ifdef __ANDROID__
+        struct episode_cards cards = {0};
+        init_episode_cards(&cards);
+        if (!cards.renderer)
+#endif
+            unfold_launch_frame();
 #ifdef COSMO_TOUCH_PREVIEW
         video_set_touch_context(TOUCH_MENU);
 #endif
         launcher_audio_ready = audio_init();
         launcher_sync_music();
 
+#ifdef __ANDROID__
+        number = run_menu(&cards);
+        if (cards.renderer) {
+            set_card_presentation(&cards, false);
+            destroy_episode_cards(&cards);
+        }
+#else
         number = run_menu();
+#endif
 
         if (number == 0) {
             launcher_audio_shutdown();

@@ -101,6 +101,12 @@
             </intent-filter>
             -->
         </activity>
+        <activity android:name="org.libsdl.app.CosmoActivity$EpisodeActivity"
+            android:process=":episode"
+            android:screenOrientation="${cosmoScreenOrientation}"
+            android:configChanges="layoutDirection|locale|grammaticalGender|fontScale|fontWeightAdjustment|orientation|uiMode|screenLayout|screenSize|smallestScreenSize|keyboard|keyboardHidden|navigation"
+            android:preferMinimalPostProcessing="true"
+            android:exported="false" />
     </application>
 
 </manifest>

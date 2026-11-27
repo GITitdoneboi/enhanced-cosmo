@@ -1,0 +1,49 @@
+diff --git a/game1.c b/game1.c
+--- a/game1.c
++++ b/game1.c
+@@ -8328,8 +8328,12 @@ static void ExitClean(void)
+     remove(FILENAME_BASE ".SVT");
+ 
+     DrawFullscreenText(EXIT_TEXT_PAGE);
+ 
++#ifdef __ANDROID__
++    void PlatformFinishEpisode(void);
++    PlatformFinishEpisode();
++#endif
+     exit(EXIT_SUCCESS);
+ }
+ 
+ /*
+@@ -10424,4 +10428,8 @@
+ */
++#ifdef __ANDROID__
++static bbool exit_after_gameplay;
++#endif
++
+ static void GameLoop(byte demo_state)
+ {
+     const word frame_ticks = demo_state == DEMO_STATE_NONE && PlatformTurboMode() ? 10 : 13;
+@@ -10439,5 +10447,10 @@ static void GameLoop(byte demo_state)
+             word result = ProcessGameInputHelper(activePage, demo_state);
+-            if (result == GAME_INPUT_QUIT) return;
++            if (result == GAME_INPUT_QUIT) {
++#ifdef __ANDROID__
++                exit_after_gameplay = demo_state == DEMO_STATE_NONE;
++#endif
++                return;
++            }
+             if (result == GAME_INPUT_RESTART) continue;
+         }
+ 
+@@ -11028,7 +11041,11 @@ void InnerMain(int argc, char *argv[])
+         StopMusic();
+ 
+         if (demoState != DEMO_STATE_PLAY && demoState != DEMO_STATE_RECORD) {
+             CheckHighScoreAndShow();
+         }
++#ifdef __ANDROID__
++        if (exit_after_gameplay) ExitClean();
++#endif
++
+ 
+         if (demoState == DEMO_STATE_RECORD) {
