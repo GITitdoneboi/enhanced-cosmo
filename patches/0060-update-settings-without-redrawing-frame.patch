@@ -1,0 +1,207 @@
+diff --git a/game2.c b/game2.c
+--- a/game2.c
++++ b/game2.c
+@@ -1953,6 +1953,10 @@
+     DrawTextLine(x, y, text);
+ }
+ 
++enum { SETTINGS_TOP = 3, SETTINGS_HEIGHT = 15, SETTINGS_WIDTH = 36 };
++#define SETTINGS_LEFT (20 - SETTINGS_WIDTH / 2)
++
++#ifndef __ANDROID__
+ /*
+ Draw UI text (without frame) instructing the user to enter a new key to bind to
+ the action described in the `message` text. `x` is used to position the text
+@@ -1974,9 +1978,6 @@
+ 
+     return false;
+ }
+-
+-enum { SETTINGS_TOP = 3, SETTINGS_HEIGHT = 15, SETTINGS_WIDTH = 36 };
+-#define SETTINGS_LEFT (20 - SETTINGS_WIDTH / 2)
+ 
+ /*
+ Let the player browse the six keyboard bindings and choose a key to change.
+@@ -2028,6 +2029,8 @@
+                       "Keyboard Mapping", TOUCH_MENU_TEXT("Esc or B to go back", "Tap Back to exit"), true);
+     }
+ }
++
++#endif
+ 
+ /*
+ Make a copy of backdrop `src` with all pixels shifted up by 4, with wrap-around.
+@@ -2961,7 +2964,10 @@
+ #endif
+ 
+ enum game_setting {
+-    SETTING_KEYBOARD, SETTING_GAMEPAD, SETTING_MUSIC,
++#ifndef __ANDROID__
++    SETTING_KEYBOARD,
++#endif
++    SETTING_GAMEPAD, SETTING_MUSIC,
+     SETTING_SOUND, SETTING_FILTER,
+ #ifdef COSMO_TOUCH_PREVIEW
+     SETTING_TOUCH,
+@@ -2982,37 +2988,84 @@
+     while (WaitSpinner(x + 30, 14) != SCANCODE_ESC) {}
+ }
+ 
+-static void DrawGameSettings(word x, byte selection, bbool save_failed)
+-{
+-    static const byte rows[SETTING_COUNT] = {7, 8, 10, 11, 12,
++static const byte settingsRows[SETTING_COUNT] = {
++#ifndef __ANDROID__
++    7, 8, 10, 11, 12,
++#else
++    7, 9, 10, 11,
++#endif
+ #ifdef COSMO_TOUCH_PREVIEW
+-        13,
++#   ifdef __ANDROID__
++    12,
++#   else
++    13,
++#   endif
+ #endif
+-    };
++};
++
++static void ClearSettingsText(word x, word y, word tiles)
++{
++    EGA_MODE_LATCHED_WRITE();
++    while (tiles--) {
++        DRAW_SOLID_TILE_XY(TILE_DARK_GRAY, x, y);
++        x++;
++    }
++}
++
++static void DrawGameSettingsValue(word x, byte setting)
++{
+     char value[20];
+ 
+-    char *help = selection <= SETTING_GAMEPAD ? TOUCH_MENU_TEXT("Enter or A opens, Esc or B back", "Tap Select to open or Back")
+-                                                     : TOUCH_MENU_TEXT("Left and Right   Esc or B back", "Left/Right to change. Back");
+-    DrawTextFrame(SETTINGS_LEFT, SETTINGS_TOP, SETTINGS_HEIGHT, SETTINGS_WIDTH,
+-                  "Game Settings", save_failed ? "Could not save setting" : help, true);
+-    DrawTextLine(x + 2, rows[SETTING_KEYBOARD], "Keyboard Mapping");
+-    DrawTextLine(x + 2, rows[SETTING_GAMEPAD], "Gamepad Controls");
+-    DrawTextLine(x + 2, rows[SETTING_MUSIC], "Music Volume");
+-    DrawTextLine(x + 2, rows[SETTING_SOUND], "Sound Volume");
+-    DrawTextLine(x + 2, rows[SETTING_FILTER], "Filter");
+-
+-    snprintf(value, sizeof value, "< %3u%% >", (unsigned)musicVolume);
+-    DrawTextLine(x + 25, rows[SETTING_MUSIC], value);
+-    snprintf(value, sizeof value, "< %3u%% >", (unsigned)soundVolume);
+-    DrawTextLine(x + 25, rows[SETTING_SOUND], value);
+-    snprintf(value, sizeof value, "< %s >", PlatformDisplayFilterName());
+-    DrawTextLine(x + 33 - strlen(value), rows[SETTING_FILTER], value);
++    switch (setting) {
++    case SETTING_MUSIC:
++        snprintf(value, sizeof value, "< %3u%% >", (unsigned)musicVolume);
++        break;
++    case SETTING_SOUND:
++        snprintf(value, sizeof value, "< %3u%% >", (unsigned)soundVolume);
++        break;
++    case SETTING_FILTER:
++        snprintf(value, sizeof value, "< %s >", PlatformDisplayFilterName());
++        break;
+ #ifdef COSMO_TOUCH_PREVIEW
+-    DrawTextLine(x + 2, rows[SETTING_TOUCH], "Touch Controls");
+-    DrawTextLine(x + 25, rows[SETTING_TOUCH],
+-                 PlatformTouchControlsEnabled() ? "< On  >" : "< Off >");
++    case SETTING_TOUCH:
++        snprintf(value, sizeof value, "< %s >", PlatformTouchControlsEnabled() ? "On" : "Off");
++        break;
+ #endif
+-    DrawTextLine(x, rows[selection], ">");
++    default:
++        return;
++    }
++
++    ClearSettingsText(x + 18, settingsRows[setting], 15);
++    DrawTextLine(x + 33 - strlen(value), settingsRows[setting], value);
++}
++
++static void DrawGameSettingsHelp(word x, byte selection, bbool save_failed)
++{
++    char *help = selection <= SETTING_GAMEPAD
++        ? TOUCH_MENU_TEXT("Enter or A opens, Esc or B back", "Tap Select to open or Back")
++        : TOUCH_MENU_TEXT("Left and Right   Esc or B back", "Left/Right to change. Back");
++    if (save_failed) help = "Could not save setting";
++    word y = SETTINGS_TOP + SETTINGS_HEIGHT - 2;
++    ClearSettingsText(x, y, SETTINGS_WIDTH - 2);
++    DrawTextLine(20 - strlen(help) / 2, y, help);
++}
++
++static void DrawGameSettings(word x, byte selection)
++{
++#ifndef __ANDROID__
++    DrawTextLine(x + 2, settingsRows[SETTING_KEYBOARD], "Keyboard Mapping");
++#endif
++    DrawTextLine(x + 2, settingsRows[SETTING_GAMEPAD], "Gamepad Controls");
++    DrawTextLine(x + 2, settingsRows[SETTING_MUSIC], "Music Volume");
++    DrawTextLine(x + 2, settingsRows[SETTING_SOUND], "Sound Volume");
++    DrawTextLine(x + 2, settingsRows[SETTING_FILTER], "Filter");
++#ifdef COSMO_TOUCH_PREVIEW
++    DrawTextLine(x + 2, settingsRows[SETTING_TOUCH], "Touch Controls");
++#endif
++    for (byte setting = SETTING_MUSIC; setting < SETTING_COUNT; setting++)
++        DrawGameSettingsValue(x, setting);
++    DrawTextLine(x, settingsRows[selection], ">");
++    DrawGameSettingsHelp(x, selection, false);
+ }
+ 
+ void PlatformSetGameSettingsOpen(int open);
+@@ -3022,22 +3075,30 @@
+     PlatformSetGameSettingsOpen(true);
+     word x = UnfoldTextFrame(SETTINGS_TOP, SETTINGS_HEIGHT, SETTINGS_WIDTH,
+                              "Game Settings", "");
+-    byte selection = SETTING_KEYBOARD;
++    byte selection = 0;
+     bbool save_failed = false;
+-    DrawGameSettings(x, selection, save_failed);
++    DrawGameSettings(x, selection);
+ 
+     for (;;) {
+         byte scancode = WaitSpinner(x + 30, 14);
+         bbool confirm = scancode == SCANCODE_ENTER || scancode == SCANCODE_SPACE;
++        byte previous = selection;
++        bbool previous_save_failed = save_failed;
+         int step = 0;
+ 
+         if (scancode == SCANCODE_ESC) break;
+ 
+         if (confirm) {
+             if (selection <= SETTING_GAMEPAD) {
++#ifndef __ANDROID__
+                 if (selection == SETTING_KEYBOARD) ShowKeyboardConfiguration();
+-                else ShowGamepadControls();
+-                DrawGameSettings(x, selection, false);
++                else
++#endif
++                    ShowGamepadControls();
++                DrawTextFrame(SETTINGS_LEFT, SETTINGS_TOP, SETTINGS_HEIGHT, SETTINGS_WIDTH,
++                              "Game Settings", "", true);
++                DrawGameSettings(x, selection);
++                save_failed = false;
+                 continue;
+             }
+             step = 1;
+@@ -3069,7 +3130,15 @@
+             isSoundEnabled = soundVolume != 0;
+             PlatformSetAudioVolumes(soundVolume, musicVolume);
+         }
+-        DrawGameSettings(x, selection, save_failed);
++        if (selection != previous) {
++            ClearSettingsText(x, settingsRows[previous], 1);
++            DrawTextLine(x, settingsRows[selection], ">");
++        }
++        if (step && selection > SETTING_GAMEPAD)
++            DrawGameSettingsValue(x, selection);
++        if (save_failed != previous_save_failed ||
++            (selection <= SETTING_GAMEPAD) != (previous <= SETTING_GAMEPAD))
++            DrawGameSettingsHelp(x, selection, save_failed);
+     }
+     PlatformSetGameSettingsOpen(false);
+ }
